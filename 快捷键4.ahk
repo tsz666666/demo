@@ -72,7 +72,6 @@ init.createTaskBarMenu() ;②.创建任务栏菜单
 init.initAll()           ;③.初始化环境变量和文件夹
 ak.seticonTip("翻译&ocr：ctrl+1",2) ;④.设置提示
 init.onStartup()         ;⑤.设置缓存连接cmd等
-linkManager.init()       ;⑥.注册链接管理右键菜单
 ;.........................................
 
 onExit onExitApp ;退出时执行
@@ -3370,110 +3369,6 @@ class recent{
 ;[@recent-5889F150A6B1430580B07D9028C9C0E4]
 ;----------------------------------------------------------------------------------------------------------最近打开的文件记录recent 类
 
-;----------------------------------------------------------------------------------------------------------链接管理类 linkManager
-;[@linkManager-7A3C9D21E84F16B05C2A78FD0E531B94]
-class linkManager {
-    ; 文件夹背景右键：HKCU\Software\Classes\Directory\Background\shell\LinkManager
-    static BgRegPath    := "Software\Classes\Directory\Background\shell\LinkManager"
-    ; helper 和 ico 统一放 A_Temp，避免脚本目录权限问题
-    static HelperFile   := A_Temp "\~LinkManager.ahk"
-    static IcoFile      := A_Temp "\AhkHeartLink.ico"
-    ; A_Args[1]=soft/hard  A_Args[2]=%V（当前文件夹路径，由注册表命令传入）
-    static LinkType     := ""
-    static DestDir      := ""
-
-    ;初始化：注册右键菜单 + 生成辅助脚本
-    static init() {
-        this.writeReg()
-        ; helper 头：从注册表命令拿到 LinkType 和 DestDir（%V），不依赖活动窗口
-        head := "#Requires AutoHotkey v2.0`n#SingleInstance Force`n#NoTrayIcon`n"
-             . "linkManager.LinkType := A_Args.Length >= 1 ? A_Args[1] : `"soft`"`n"
-             . "linkManager.DestDir  := A_Args.Length >= 2 ? A_Args[2] : `"`"`n"
-             . "linkManager.batchCreate()`n"
-        if FileExist(this.HelperFile)
-            FileDelete(this.HelperFile)
-        FileAppend(head . ak.getPartScript("getResourceBase64") . ak.getPartScript("linkManager") . ak.getPartScript("ak"), this.HelperFile)
-    }
-
-    ;写注册表：在文件夹空白处右键添加"创建链接"级联子菜单
-    ;关键：父键须写 MUIVerb + SubCommands=""，Explorer 才会展开 shell\ 子键为飞出菜单
-    ;命令中加 "%V" 让 Explorer 把当前文件夹路径传给 helper
-    static writeReg() {
-        icoPath := this.IcoFile
-        helperFile := this.HelperFile
-        if not A_IsCompiled {
-            ak.createFileByBase64(getResourceBase64("icon1"), icoPath)
-            base := "HKEY_CURRENT_USER\" this.BgRegPath
-            ; 父菜单：MUIVerb 为显示名，SubCommands="" 告知 Explorer 展开 shell\ 子键
-            RegWrite("",             "REG_SZ", base)
-            RegWrite("🔗 创建链接", "REG_SZ", base, "MUIVerb")
-            RegWrite(icoPath,        "REG_SZ", base, "Icon")
-            RegWrite("",             "REG_SZ", base, "SubCommands")
-            ; 子菜单：软链接（%V = 当前文件夹路径）
-            soft := base . "\shell\01_soft"
-            RegWrite("",                   "REG_SZ", soft)
-            RegWrite("📎 批量创建软链接", "REG_SZ", soft, "MUIVerb")
-            RegWrite(Format('"{1}" "{2}" soft "%V"', A_AhkPath, helperFile),
-                     "REG_SZ", soft . "\command")
-            ; 子菜单：硬链接
-            hard := base . "\shell\02_hard"
-            RegWrite("",                   "REG_SZ", hard)
-            RegWrite("🔗 批量创建硬链接", "REG_SZ", hard, "MUIVerb")
-            RegWrite(Format('"{1}" "{2}" hard "%V"', A_AhkPath, helperFile),
-                     "REG_SZ", hard . "\command")
-        }
-    }
-
-    ;批量创建链接（由辅助脚本调用）
-    ;destDir 直接来自注册表命令传入的 %V，无需读活动窗口
-    static batchCreate() {
-        destDir := RTrim(linkManager.DestDir, "\")
-        if !destDir {
-            MsgBox("无法获取当前文件夹路径（A_Args[2] 为空）。", "链接管理", 0x10)
-            ExitApp()
-        }
-        selected := FileSelect("M", destDir, "选择要链接的源文件（可多选）", "所有文件 (*.*)")
-        if !IsObject(selected) || selected.Length = 0
-            ExitApp()
-
-        isHard := (linkManager.LinkType = "hard")
-        ok := 0, fail := 0, failReasons := ""
-        for srcPath in selected {
-            SplitPath(srcPath, &fname)
-            destPath := destDir "\" fname
-            if FileExist(destPath) {
-                fail++
-                failReasons .= "已存在: " fname "`n"
-                continue
-            }
-            if isHard {
-                if SubStr(srcPath, 1, 1) != SubStr(destDir, 1, 1) {
-                    fail++
-                    failReasons .= "跨盘(硬链接限同盘): " fname "`n"
-                    continue
-                }
-                cmd := 'mklink /H "' destPath '" "' srcPath '"'
-            } else {
-                cmd := 'mklink "' destPath '" "' srcPath '"'
-            }
-            RunWait('cmd.exe /c ' cmd,, "Hide")
-            if FileExist(destPath)
-                ok++
-            else {
-                fail++
-                failReasons .= "mklink失败: " fname "`n"
-            }
-        }
-        typeStr := isHard ? "硬链接" : "软链接"
-        msg := "创建" typeStr "完成：成功 " ok " 个"
-        if fail > 0
-            msg .= "，失败/跳过 " fail " 个`n`n" failReasons
-        MsgBox(msg, "链接管理", 0x40)
-        ExitApp()
-    }
-}
-;[@linkManager-7A3C9D21E84F16B05C2A78FD0E531B94]
-;----------------------------------------------------------------------------------------------------------链接管理类 linkManager
 
 ;++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++ak工具类class
 ;[@ak-1FFF08E96143432088593A06D97CECF7]
