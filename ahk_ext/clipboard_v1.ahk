@@ -2598,12 +2598,23 @@ ClipsToJson(append := false) {
             out .= ","
         first := false
         imgFile := c.HasProp("imgFile") ? c.imgFile : ""
+        preview := c.HasProp("preview") ? String(c.preview) : ""
+        ; List payload must stay small — full text body is loaded only on paste
         if c.type = "image" {
             data := ""
             preview := ""
+        } else if c.type = "link" {
+            data := (c.HasProp("data") && c.data != "") ? String(c.data) : preview
+            if preview = ""
+                preview := data
+        } else if c.type = "file" {
+            data := preview != "" ? preview : String(c.HasProp("data") ? c.data : "")
+            if preview = ""
+                preview := data
         } else {
-            data := c.data
-            preview := c.HasProp("preview") ? c.preview : ""
+            data := ""
+            if preview = "" && c.HasProp("data") && c.data != ""
+                preview := SubStr(String(c.data), 1, 500)
         }
         uid := c.HasProp("uid") ? Integer(c.uid) : i
         out .= "{"
@@ -2657,6 +2668,9 @@ PasteItem(uid) {
     if !IsObject(item)
         return
 
+    ; Hide first — never keep UI up while disk/JSON work runs
+    HidePanel()
+
     clipIgnore := true
     try {
         ok := false
@@ -2672,7 +2686,6 @@ PasteItem(uid) {
         if !ok && !PutItemOnClipboard(item)
             return
         MarkItemsPasted([item.uid])
-        HidePanel()
         if prevActiveWin {
             DllCall("SetForegroundWindow", "Ptr", prevActiveWin)
             Sleep 15
@@ -2706,12 +2719,12 @@ PasteMany(idsStr) {
 
     paths := CollectPasteFilePaths(items)
     if paths.Length {
+        HidePanel()
         clipIgnore := true
         try {
             if !SetClipboardFiles(paths)
                 return
             MarkItemsPasted(uids)
-            HidePanel()
             if prevActiveWin {
                 DllCall("SetForegroundWindow", "Ptr", prevActiveWin)
                 Sleep 30
@@ -2723,10 +2736,10 @@ PasteMany(idsStr) {
         return
     }
 
+    HidePanel()
     clipIgnore := true
     pastedIds := []
     try {
-        HidePanel()
         if prevActiveWin {
             DllCall("SetForegroundWindow", "Ptr", prevActiveWin)
             Sleep 20
@@ -2828,7 +2841,12 @@ GetItemFilePaths(item) {
     paths := []
     if !IsObject(item) || item.type != "file"
         return paths
-    for ln in StrSplit(String(item.data), "`n", "`r") {
+    raw := ""
+    if item.HasProp("data") && item.data != ""
+        raw := String(item.data)
+    else if item.HasProp("preview")
+        raw := String(item.preview)
+    for ln in StrSplit(raw, "`n", "`r") {
         ln := Trim(ln)
         if ln != "" && FileExist(ln)
             paths.Push(ln)
@@ -3091,19 +3109,28 @@ PinItem(uid) {
 }
 
 MarkItemsPasted(uids) {
-    global clips
+    global clips, viewCache, panelVisible
     want := Map()
     for uid in uids
         want[Integer(uid)] := true
     if !want.Count
         return
-    if !DiskSetPasted(want, true)
-        return
+    ; Optimistic memory update — disk write is async (was blocking paste for seconds)
     for c in clips {
         if want.Has(c.uid)
             c.pasted := true
     }
-    PushClips(false)
+    for , entry in viewCache {
+        if !IsObject(entry) || !entry.HasProp("items")
+            continue
+        for c in entry.items {
+            if want.Has(c.uid)
+                c.pasted := true
+        }
+    }
+    EnqueueDiskJob(DiskSetPasted.Bind(want, true))
+    if panelVisible
+        SetTimer(() => PushClips(false), -80)
 }
 
 ClearPasted(uid) {
